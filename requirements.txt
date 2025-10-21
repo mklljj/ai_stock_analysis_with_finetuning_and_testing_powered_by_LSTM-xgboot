@@ -1,0 +1,1 @@
+pip3 install -i https://pypi.tuna.tsinghua.edu.cn/simple yfinance pandas numpy scikit-learn xgboost tensorflow matplotlib lxml html5lib pyarrow

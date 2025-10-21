@@ -13,6 +13,152 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ============================================
+# DATA CLEANING FUNCTIONS
+# ============================================
+def clean_dataframe(df):
+    """Clean dataframe by removing inf and large values"""
+    df_clean = df.copy()
+    
+    # Replace inf with NaN
+    df_clean = df_clean.replace([np.inf, -np.inf], np.nan)
+    
+    # Fill NaN values
+    numeric_columns = df_clean.select_dtypes(include=[np.number]).columns
+    df_clean[numeric_columns] = df_clean[numeric_columns].fillna(method='ffill').fillna(method='bfill')
+    df_clean[numeric_columns] = df_clean[numeric_columns].fillna(0)
+    
+    return df_clean
+
+def validate_and_clean_features(X, y=None):
+    """Validate and clean feature matrices - handles both 2D and 3D data"""
+    print("🔍 Validating data quality...")
+    
+    # Convert to numpy arrays if needed
+    if hasattr(X, 'values'):
+        X = X.values
+    if y is not None and hasattr(y, 'values'):
+        y = y.values
+    
+    # Handle 3D data (LSTM sequences)
+    if X.ndim == 3:
+        return validate_3d_data(X, y)
+    
+    # Handle 2D data (XGBoost features)
+    return validate_2d_data(X, y)
+
+def validate_2d_data(X, y=None):
+    """Validate 2D data for XGBoost"""
+    # Check for inf values in X
+    inf_mask_x = np.isinf(X).any(axis=1)
+    inf_count_x = inf_mask_x.sum()
+    
+    inf_count_y = 0
+    if y is not None:
+        inf_mask_y = np.isinf(y)
+        inf_count_y = inf_mask_y.sum()
+        valid_mask = ~(inf_mask_x | inf_mask_y)
+    else:
+        valid_mask = ~inf_mask_x
+    
+    total_inf = inf_count_x + inf_count_y
+    if total_inf > 0:
+        print(f"⚠️  Found {total_inf} infinite values, cleaning...")
+        X = X[valid_mask]
+        if y is not None:
+            y = y[valid_mask]
+    
+    # Check for NaN values
+    nan_mask_x = np.isnan(X).any(axis=1)
+    nan_count_x = nan_mask_x.sum()
+    
+    nan_count_y = 0
+    if y is not None:
+        nan_mask_y = np.isnan(y)
+        nan_count_y = nan_mask_y.sum()
+        valid_mask_nan = ~(nan_mask_x | nan_mask_y)
+    else:
+        valid_mask_nan = ~nan_mask_x
+    
+    total_nan = nan_count_x + nan_count_y
+    if total_nan > 0:
+        print(f"⚠️  Found {total_nan} NaN values, cleaning...")
+        X = X[valid_mask_nan]
+        if y is not None:
+            y = y[valid_mask_nan]
+    
+    # Check for extremely large values
+    large_value_mask = (np.abs(X) > 1e10).any(axis=1)
+    large_count = large_value_mask.sum()
+    if large_count > 0:
+        print(f"⚠️  Found {large_count} extremely large values, cleaning...")
+        X = X[~large_value_mask]
+        if y is not None:
+            y = y[~large_value_mask]
+    
+    print(f"✅ Data validation complete - Final shape: {X.shape}")
+    
+    if y is not None:
+        return X, y
+    return X
+
+def validate_3d_data(X, y=None):
+    """Validate 3D data for LSTM"""
+    original_shape = X.shape
+    
+    # Check for inf values in 3D data
+    inf_mask_x = np.isinf(X).any(axis=(1, 2))
+    inf_count_x = inf_mask_x.sum()
+    
+    inf_count_y = 0
+    if y is not None:
+        inf_mask_y = np.isinf(y)
+        inf_count_y = inf_mask_y.sum()
+        valid_mask = ~(inf_mask_x | inf_mask_y)
+    else:
+        valid_mask = ~inf_mask_x
+    
+    total_inf = inf_count_x + inf_count_y
+    if total_inf > 0:
+        print(f"⚠️  Found {total_inf} infinite values in sequences, cleaning...")
+        X = X[valid_mask]
+        if y is not None:
+            y = y[valid_mask]
+    
+    # Check for NaN values in 3D data
+    nan_mask_x = np.isnan(X).any(axis=(1, 2))
+    nan_count_x = nan_mask_x.sum()
+    
+    nan_count_y = 0
+    if y is not None:
+        nan_mask_y = np.isnan(y)
+        nan_count_y = nan_mask_y.sum()
+        valid_mask_nan = ~(nan_mask_x | nan_mask_y)
+    else:
+        valid_mask_nan = ~nan_mask_x
+    
+    total_nan = nan_count_x + nan_count_y
+    if total_nan > 0:
+        print(f"⚠️  Found {total_nan} NaN values in sequences, cleaning...")
+        X = X[valid_mask_nan]
+        if y is not None:
+            y = y[valid_mask_nan]
+    
+    # Check for extremely large values in 3D data
+    large_value_mask = (np.abs(X) > 1e10).any(axis=(1, 2))
+    large_count = large_value_mask.sum()
+    if large_count > 0:
+        print(f"⚠️  Found {large_count} extremely large values in sequences, cleaning...")
+        X = X[~large_value_mask]
+        if y is not None:
+            y = y[~large_value_mask]
+    
+    print(f"✅ LSTM data validation complete - Final shape: {X.shape} (was {original_shape})")
+    
+    if y is not None:
+        return X, y
+    return X
+
+# ============================================
 # FEATURE ENGINEERING
 # ============================================
 def create_features(df):
@@ -64,7 +210,12 @@ def create_features(df):
         
         result.append(df_stock)
     
-    return pd.concat(result, ignore_index=True).dropna()
+    combined_df = pd.concat(result, ignore_index=True)
+    
+    # Clean the combined dataframe
+    combined_df = clean_dataframe(combined_df)
+    
+    return combined_df.dropna()
 
 def create_sequences(data, seq_length=60):
     """Create sequences for LSTM"""
@@ -157,6 +308,9 @@ def train_multi_stock_model(df, tickers=None, sequence_length=60):
     
     print(f"Combined LSTM data shape: {X_lstm.shape}")
     
+    # Validate and clean LSTM data (handles 3D data)
+    X_lstm, y_lstm = validate_and_clean_features(X_lstm, y_lstm)
+    
     # Shuffle data (important for multi-stock training)
     shuffle_idx = np.random.permutation(len(X_lstm))
     X_lstm = X_lstm[shuffle_idx]
@@ -211,8 +365,14 @@ def train_multi_stock_model(df, tickers=None, sequence_length=60):
     # For multi-stock, use percentage returns as target
     df_xgb = df_features[xgb_features + ['target_return']].dropna()
     
+    # Clean the XGBoost dataframe
+    df_xgb = clean_dataframe(df_xgb)
+    
     X_xgb = df_xgb[xgb_features].values
     y_xgb = df_xgb['target_return'].values
+    
+    # Validate and clean XGBoost data (handles 2D data)
+    X_xgb, y_xgb = validate_and_clean_features(X_xgb, y_xgb)
     
     # Shuffle data
     shuffle_idx = np.random.permutation(len(X_xgb))
@@ -227,7 +387,7 @@ def train_multi_stock_model(df, tickers=None, sequence_length=60):
     print(f"XGBoost Train shape: {X_xgb_train.shape}")
     print(f"XGBoost Test shape: {X_xgb_test.shape}")
     
-    # Train XGBoost
+    # Train XGBoost with explicit missing value handling
     print("\nTraining XGBoost on all stocks...")
     xgb_model = xgb.XGBRegressor(
         n_estimators=300,
@@ -237,7 +397,8 @@ def train_multi_stock_model(df, tickers=None, sequence_length=60):
         subsample=0.8,
         colsample_bytree=0.8,
         random_state=42,
-        n_jobs=-1
+        n_jobs=-1,
+        missing=np.nan  # Explicitly handle missing values
     )
     
     xgb_model.fit(X_xgb_train, y_xgb_train, verbose=False)
@@ -318,11 +479,110 @@ def train_single_stock_model(df, ticker='AAPL', sequence_length=60):
     print(f"Data shape: {df_stock.shape}")
     print(f"Date range: {df_stock['date'].min()} to {df_stock['date'].max()}\n")
     
-    # Feature engineering
+    # Feature engineering with cleaning
     df_features = create_features(df_stock)
     
-    # ... (rest of single-stock training code - same as before)
-    # I'll abbreviate this since it's the same as the previous version
+    # LSTM Features
+    lstm_features = ['Close', 'Volume', 'MA_5', 'MA_20', 'RSI', 'MACD', 'volatility_10']
+    
+    # Prepare LSTM data
+    scaler_lstm = MinMaxScaler()
+    data_scaled = scaler_lstm.fit_transform(df_features[lstm_features])
+    
+    # Create sequences
+    X, y = create_sequences(data_scaled, sequence_length)
+    
+    # Validate and clean LSTM data
+    X, y = validate_and_clean_features(X, y)
+    
+    # Split train/test
+    split_idx = int(0.8 * len(X))
+    X_train, X_test = X[:split_idx], X[split_idx:]
+    y_train, y_test = y[:split_idx], y[split_idx:]
+    
+    print(f"LSTM Train shape: {X_train.shape}")
+    print(f"LSTM Test shape: {X_test.shape}")
+    
+    # Build and train LSTM
+    lstm_model = build_lstm_model((X_train.shape[1], X_train.shape[2]))
+    
+    print("\nTraining LSTM...")
+    history = lstm_model.fit(
+        X_train, y_train,
+        batch_size=32,
+        epochs=50,
+        validation_data=(X_test, y_test),
+        verbose=1,
+        shuffle=False
+    )
+    
+    # LSTM predictions
+    lstm_pred_train = lstm_model.predict(X_train, verbose=0).flatten()
+    lstm_pred_test = lstm_model.predict(X_test, verbose=0).flatten()
+    
+    lstm_train_rmse = np.sqrt(mean_squared_error(y_train, lstm_pred_train))
+    lstm_test_rmse = np.sqrt(mean_squared_error(y_test, lstm_pred_test))
+    lstm_train_mae = mean_absolute_error(y_train, lstm_pred_train)
+    lstm_test_mae = mean_absolute_error(y_test, lstm_pred_test)
+    
+    # XGBoost Features
+    xgb_features = ['Open', 'High', 'Low', 'Close', 'Volume', 
+                    'MA_5', 'MA_10', 'MA_20', 'MA_50',
+                    'volatility_10', 'volatility_20', 'RSI', 'MACD',
+                    'momentum_5', 'momentum_10', 'volume_change']
+    
+    # Prepare XGBoost data
+    df_xgb = df_features[xgb_features + ['target_return']].dropna()
+    
+    # Clean XGBoost data
+    df_xgb = clean_dataframe(df_xgb)
+    
+    X_xgb = df_xgb[xgb_features].values
+    y_xgb = df_xgb['target_return'].values
+    
+    # Validate and clean XGBoost data
+    X_xgb, y_xgb = validate_and_clean_features(X_xgb, y_xgb)
+    
+    # Split train/test
+    split_idx_xgb = int(0.8 * len(X_xgb))
+    X_xgb_train, X_xgb_test = X_xgb[:split_idx_xgb], X_xgb[split_idx_xgb:]
+    y_xgb_train, y_xgb_test = y_xgb[:split_idx_xgb], y_xgb[split_idx_xgb:]
+    
+    print(f"XGBoost Train shape: {X_xgb_train.shape}")
+    print(f"XGBoost Test shape: {X_xgb_test.shape}")
+    
+    # Train XGBoost
+    print("\nTraining XGBoost...")
+    xgb_model = xgb.XGBRegressor(
+        n_estimators=200,
+        learning_rate=0.1,
+        max_depth=6,
+        random_state=42,
+        n_jobs=-1,
+        missing=np.nan
+    )
+    
+    xgb_model.fit(X_xgb_train, y_xgb_train, verbose=False)
+    
+    # XGBoost predictions
+    xgb_pred_train = xgb_model.predict(X_xgb_train)
+    xgb_pred_test = xgb_model.predict(X_xgb_test)
+    
+    xgb_train_rmse = np.sqrt(mean_squared_error(y_xgb_train, xgb_pred_train))
+    xgb_test_rmse = np.sqrt(mean_squared_error(y_xgb_test, xgb_pred_test))
+    xgb_train_mae = mean_absolute_error(y_xgb_train, xgb_pred_train)
+    xgb_test_mae = mean_absolute_error(y_xgb_test, xgb_pred_test)
+    
+    # Results
+    results = pd.DataFrame({
+        'Model': ['LSTM', 'XGBoost'],
+        'Train RMSE': [lstm_train_rmse, xgb_train_rmse],
+        'Test RMSE': [lstm_test_rmse, xgb_test_rmse],
+        'Train MAE': [lstm_train_mae, xgb_train_mae],
+        'Test MAE': [lstm_test_mae, xgb_test_mae]
+    })
+    
+    print("\n", results.to_string(index=False))
     
     return {
         'lstm_model': lstm_model,
@@ -366,17 +626,17 @@ def save_models(models, model_name='multi_stock', save_dir='saved_models'):
     metadata = {
         'timestamp': timestamp,
         'training_type': models.get('training_type', 'unknown'),
-        'lstm_weight': models['lstm_weight'],
-        'xgb_weight': models['xgb_weight'],
-        'sequence_length': models['sequence_length'],
-        'lstm_features': models['lstm_features'],
-        'xgb_features': models['xgb_features']
+        'sequence_length': models.get('sequence_length', 60),
+        'lstm_features': models.get('lstm_features', []),
+        'xgb_features': models.get('xgb_features', [])
     }
     
     if models.get('training_type') == 'single_stock':
         metadata['ticker'] = models['ticker']
     else:
         metadata['tickers'] = models.get('tickers', [])
+        metadata['lstm_weight'] = models.get('lstm_weight', 0.6)
+        metadata['xgb_weight'] = models.get('xgb_weight', 0.4)
     
     metadata_path = os.path.join(model_path, 'metadata.json')
     with open(metadata_path, 'w') as f:
